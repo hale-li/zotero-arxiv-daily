@@ -2,38 +2,64 @@ from dataclasses import dataclass
 from typing import Optional, TypeVar
 from datetime import datetime
 import re
+import time
 import tiktoken
 from openai import OpenAI
 from loguru import logger
 import json
 RawPaperItem = TypeVar('RawPaperItem')
 
+# Some OpenAI-compatible gateways reject bursts with a concurrency 429 even
+# though the daily quota is untouched, so every request is retried with
+# exponential backoff before the caller falls back to the raw abstract.
+LLM_MAX_ATTEMPTS = 5
+LLM_RETRY_BASE_SECONDS = 5
+LLM_RETRY_MAX_SECONDS = 45
+LLM_RETRYABLE_STATUS = {408, 409, 429, 500, 502, 503, 504}
+
 
 def _request_llm(openai_client: OpenAI, llm_params: dict, messages: list[dict]) -> str:
     api_mode = llm_params.get("api_mode", "chat_completion")
     generation_kwargs = dict(llm_params.get("generation_kwargs", {}))
 
-    if api_mode == "chat_completion":
-        response = openai_client.chat.completions.create(
-            messages=messages,
-            **generation_kwargs,
+    if api_mode not in ("chat_completion", "response"):
+        raise ValueError(
+            f"Unsupported llm.api_mode: {api_mode}. "
+            "Expected 'chat_completion' or 'response'."
         )
-        return response.choices[0].message.content
 
-    if api_mode == "response":
-        max_tokens = generation_kwargs.pop("max_tokens", None)
-        if max_tokens is not None and "max_output_tokens" not in generation_kwargs:
-            generation_kwargs["max_output_tokens"] = max_tokens
+    def _call() -> str:
+        if api_mode == "chat_completion":
+            response = openai_client.chat.completions.create(
+                messages=messages,
+                **generation_kwargs,
+            )
+            return response.choices[0].message.content
+
+        kwargs = dict(generation_kwargs)
+        max_tokens = kwargs.pop("max_tokens", None)
+        if max_tokens is not None and "max_output_tokens" not in kwargs:
+            kwargs["max_output_tokens"] = max_tokens
         response = openai_client.responses.create(
             input=messages,
-            **generation_kwargs,
+            **kwargs,
         )
         return response.output_text
 
-    raise ValueError(
-        f"Unsupported llm.api_mode: {api_mode}. "
-        "Expected 'chat_completion' or 'response'."
-    )
+    for attempt in range(LLM_MAX_ATTEMPTS):
+        try:
+            return _call()
+        except Exception as exc:
+            status = getattr(exc, "status_code", None)
+            retryable = status is None or status in LLM_RETRYABLE_STATUS
+            if not retryable or attempt == LLM_MAX_ATTEMPTS - 1:
+                raise
+            delay = min(LLM_RETRY_BASE_SECONDS * (2 ** attempt), LLM_RETRY_MAX_SECONDS)
+            logger.warning(
+                f"LLM request failed (status={status}), retry "
+                f"{attempt + 1}/{LLM_MAX_ATTEMPTS - 1} in {delay}s: {exc}"
+            )
+            time.sleep(delay)
 
 
 @dataclass
