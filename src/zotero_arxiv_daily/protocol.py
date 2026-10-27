@@ -48,10 +48,11 @@ class Paper:
     tldr: Optional[str] = None
     affiliations: Optional[list[str]] = None
     score: Optional[float] = None
+    doi: Optional[str] = None
 
     def _generate_tldr_with_llm(self, openai_client:OpenAI,llm_params:dict) -> str:
         lang = llm_params.get('language', 'English')
-        prompt = f"Given the following information of a paper, generate a one-sentence TLDR summary in {lang}:\n\n"
+        prompt = f"Given the following information of a paper, generate a concise TLDR summary in {lang} (2-3 sentences, covering the core method and main finding):\n\n"
         if self.title:
             prompt += f"Title:\n {self.title}\n\n"
 

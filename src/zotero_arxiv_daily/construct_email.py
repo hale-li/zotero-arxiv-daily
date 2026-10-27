@@ -1,5 +1,39 @@
 from .protocol import Paper
 import math
+import re
+
+CODE_URL_PATTERN = re.compile(
+    r"https?://github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)", re.IGNORECASE
+)
+GITHUB_NON_REPO_OWNERS = {
+    "features", "topics", "about", "pricing", "login", "apps", "marketplace",
+    "orgs", "users", "sponsors", "collections", "trending", "explore",
+    "settings", "notifications", "new", "security", "site",
+}
+
+
+def extract_code_url(paper: Paper) -> str | None:
+    """Return the first GitHub repository URL mentioned in the paper text."""
+    text = " ".join(part for part in (paper.full_text, paper.abstract) if part)
+    if not text:
+        return None
+    for match in CODE_URL_PATTERN.finditer(text):
+        owner, repo = match.group(1), match.group(2)
+        if owner.lower() in GITHUB_NON_REPO_OWNERS:
+            continue
+        repo = re.sub(r"\.git$", "", repo).rstrip(".-_")
+        if not repo:
+            continue
+        return f"https://github.com/{owner}/{repo}"
+    return None
+
+
+def _link_button(href: str, label: str, color: str = "#d9534f") -> str:
+    return (
+        f'<a href="{href}" style="display: inline-block; text-decoration: none; '
+        f'font-size: 14px; font-weight: bold; color: #fff; background-color: {color}; '
+        f'padding: 8px 16px; border-radius: 4px; margin: 0 8px 8px 0;">{label}</a>'
+    )
 
 
 framework = """
@@ -52,7 +86,24 @@ def get_empty_html():
   """
   return block_template
 
-def get_block_html(title:str, authors:str, rate:str, tldr:str, pdf_url:str, affiliations:str=None):
+def get_block_html(title:str, authors:str, rate:str, tldr:str, pdf_url:str, affiliations:str=None, url:str=None, doi:str=None, code_url:str=None):
+    buttons = []
+    if pdf_url:
+        buttons.append(_link_button(pdf_url, "PDF"))
+    if url:
+        buttons.append(_link_button(url, "Abstract", "#337ab7"))
+    if code_url:
+        buttons.append(_link_button(code_url, "Code", "#2f8f46"))
+    buttons_html = "".join(buttons)
+    if doi:
+        doi_html = (
+            '<tr><td style="font-size: 12px; color: #888; padding: 4px 0;">'
+            f'DOI: <a href="https://doi.org/{doi}" style="color: #888;">{doi}</a>'
+            '</td></tr>'
+        )
+    else:
+        doi_html = ""
+
     block_template = """
     <table border="0" cellpadding="0" cellspacing="0" width="100%" style="font-family: Arial, sans-serif; border: 1px solid #ddd; border-radius: 8px; padding: 16px; background-color: #f9f9f9;">
     <tr>
@@ -80,12 +131,13 @@ def get_block_html(title:str, authors:str, rate:str, tldr:str, pdf_url:str, affi
 
     <tr>
         <td style="padding: 8px 0;">
-            <a href="{pdf_url}" style="display: inline-block; text-decoration: none; font-size: 14px; font-weight: bold; color: #fff; background-color: #d9534f; padding: 8px 16px; border-radius: 4px;">PDF</a>
+            {buttons}
         </td>
     </tr>
+    {doi_line}
 </table>
 """
-    return block_template.format(title=title, authors=authors,rate=rate, tldr=tldr, pdf_url=pdf_url, affiliations=affiliations)
+    return block_template.format(title=title, authors=authors,rate=rate, tldr=tldr, pdf_url=pdf_url, affiliations=affiliations, buttons=buttons_html, doi_line=doi_html)
 
 def get_stars(score:float):
     full_star = '<span class="full-star">⭐</span>'
@@ -125,7 +177,7 @@ def render_email(papers:list[Paper]) -> str:
                 affiliations += ', ...'
         else:
             affiliations = 'Unknown Affiliation'
-        parts.append(get_block_html(p.title, authors, rate, p.tldr, p.pdf_url, affiliations))
+        parts.append(get_block_html(p.title, authors, rate, p.tldr, p.pdf_url, affiliations, p.url, p.doi, extract_code_url(p)))
 
     content = '<br>' + '</br><br>'.join(parts) + '</br>'
     return framework.replace('__CONTENT__', content)

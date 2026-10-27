@@ -207,6 +207,24 @@ def _entry_to_arxiv_result(entry: Any) -> ArxivResult:
     )
 
 
+def arxiv_registered_doi(paper: ArxivResult) -> str | None:
+    """Return the DataCite DOI that arXiv registers for every preprint.
+
+    arXiv mints ``10.48550/arXiv.<short_id>`` for each paper, so a DOI can be
+    shown even when the paper has no journal reference yet.
+    """
+    try:
+        short_id = paper.get_short_id()
+    except Exception:
+        return None
+    if not short_id:
+        return None
+    short_id = re.sub(r"v\d+$", "", short_id)
+    if not short_id:
+        return None
+    return f"10.48550/arXiv.{short_id}"
+
+
 @register_retriever("arxiv")
 class ArxivRetriever(BaseRetriever):
     def __init__(self, config):
@@ -295,6 +313,7 @@ class ArxivRetriever(BaseRetriever):
             url=raw_paper.entry_id,
             pdf_url=pdf_url,
             full_text=full_text,
+            doi=raw_paper.doi or arxiv_registered_doi(raw_paper),
         )
 
 
